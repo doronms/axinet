@@ -1232,7 +1232,13 @@ static netdev_tx_t axienet_start_xmit(struct sk_buff *skb, struct net_device *nd
 
     /* Build descriptor */
     desc = &priv->tx_ring[head];
-    desc->control = cpu_to_le32(XDMA_DESC_MAGIC | XDMA_DESC_SOP | XDMA_DESC_EOP);
+    /*
+     * XDMA expects end-of-transfer descriptors to be marked STOPPED.
+     * Without STOPPED, single-descriptor TX submissions may never retire,
+     * which leaves the software ring permanently full in polling mode.
+     */
+    desc->control = cpu_to_le32(XDMA_DESC_MAGIC | XDMA_DESC_STOPPED |
+                                XDMA_DESC_SOP | XDMA_DESC_EOP);
     desc->bytes = cpu_to_le32(skb->len);
     desc->src_addr = cpu_to_le64(dma);
     desc->dst_addr = 0;
