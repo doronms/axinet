@@ -30,6 +30,11 @@ static int debug = 1;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Debug level (0=off, 1=info, 2=verbose)");
 
+static int force_dma32;
+module_param(force_dma32, int, 0644);
+MODULE_PARM_DESC(force_dma32,
+                 "Force 32-bit DMA mask (debug aid for SG descriptor fetch issues)");
+
 #define DBG(lvl, fmt, ...) do { \
     if (debug >= (lvl)) \
         pr_info(DRV_NAME ": " fmt, ##__VA_ARGS__); \
@@ -185,7 +190,7 @@ u32 xdma_get_and_clear_pending(struct device *dev)
     struct pci_dev *pdev;
     struct mcu_bridge_data *bd;
     void __iomem *base;
-    u32 pending;
+    u32 pending, ret_pending;
     unsigned long flags;
     int i;
 
@@ -210,6 +215,8 @@ u32 xdma_get_and_clear_pending(struct device *dev)
 
     spin_unlock_irqrestore(&bd->lock, flags);
 
+    ret_pending = pending;
+
     /* Update statistics */
     for (i = 0; i < MCU_IRQ_COUNT && pending; i++) {
         if (pending & BIT(i))
@@ -217,7 +224,7 @@ u32 xdma_get_and_clear_pending(struct device *dev)
         pending &= ~BIT(i);
     }
 
-    return pending;
+    return ret_pending;
 }
 EXPORT_SYMBOL_GPL(xdma_get_and_clear_pending);
 
@@ -462,12 +469,24 @@ static int mcu_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
     }
 
     /* Set DMA mask */
-    ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-    if (ret) {
+    if (force_dma32) {
         ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
         if (ret) {
-            dev_err(&pdev->dev, "Failed to set DMA mask\n");
+            dev_err(&pdev->dev, "Failed to force 32-bit DMA mask\n");
             goto err_release;
+        }
+        dev_warn(&pdev->dev,
+                 "force_dma32=1: using 32-bit DMA mask for bring-up diagnostics\n");
+    } else {
+        ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+        if (ret) {
+            ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+            if (ret) {
+                dev_err(&pdev->dev, "Failed to set DMA mask\n");
+                goto err_release;
+            }
+            dev_warn(&pdev->dev,
+                     "64-bit DMA unavailable, fell back to 32-bit DMA mask\n");
         }
     }
 
