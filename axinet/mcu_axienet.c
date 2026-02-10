@@ -1109,6 +1109,7 @@ static void axienet_rx_ring_free(struct axienet_priv *priv)
 static void axienet_dma_start(struct axienet_priv *priv)
 {
     u32 c2h_id, h2c_id;
+    u32 c2h_desc_lo_rb, c2h_desc_hi_rb, c2h_adj_rb, c2h_cred_rb;
 
     /* Read channel IDs to verify they exist */
     h2c_id = h2c_read(priv, 0, XDMA_CHAN_ID);
@@ -1150,6 +1151,15 @@ static void axienet_dma_start(struct axienet_priv *priv)
     wmb();  /* Ensure descriptors are visible before posting credits */
     c2h_write(priv, 0, XDMA_SGDMA_DESC_CREDITS, RX_RING_SIZE);
     priv->rx_credits_posted = RX_RING_SIZE;
+
+    c2h_desc_lo_rb = c2h_read(priv, 0, XDMA_SGDMA_DESC_LO);
+    c2h_desc_hi_rb = c2h_read(priv, 0, XDMA_SGDMA_DESC_HI);
+    c2h_adj_rb = c2h_read(priv, 0, XDMA_SGDMA_DESC_ADJ);
+    c2h_cred_rb = c2h_read(priv, 0, XDMA_SGDMA_DESC_CREDITS);
+    dev_info(priv->dev,
+             "C2H_0 setup: ring_dma=%pad (hi=0x%08x) rb_desc=0x%08x%08x adj=0x%08x credits=0x%08x\n",
+             &priv->rx_ring_dma, upper_32_bits(priv->rx_ring_dma),
+             c2h_desc_hi_rb, c2h_desc_lo_rb, c2h_adj_rb, c2h_cred_rb);
 
     dev_info(priv->dev, "C2H_0: Posted %d descriptor credits (CRITICAL)\n",
              RX_RING_SIZE);
@@ -1247,10 +1257,18 @@ static netdev_tx_t axienet_start_xmit(struct sk_buff *skb, struct net_device *nd
     wmb();
 
     /* Submit to H2C channel */
-    h2c_write(priv, 0, XDMA_SGDMA_DESC_LO,
-              lower_32_bits(priv->tx_ring_dma + head * sizeof(struct xdma_desc)));
-    h2c_write(priv, 0, XDMA_SGDMA_DESC_HI,
-              upper_32_bits(priv->tx_ring_dma + head * sizeof(struct xdma_desc)));
+    {
+        dma_addr_t tx_desc_dma = priv->tx_ring_dma + head * sizeof(struct xdma_desc);
+        h2c_write(priv, 0, XDMA_SGDMA_DESC_LO, lower_32_bits(tx_desc_dma));
+        h2c_write(priv, 0, XDMA_SGDMA_DESC_HI, upper_32_bits(tx_desc_dma));
+        if (debug >= 3) {
+            dev_info(priv->dev,
+                     "TX[%u] desc_dma=%pad (hi=0x%08x) rb_desc=0x%08x%08x\n",
+                     head, &tx_desc_dma, upper_32_bits(tx_desc_dma),
+                     h2c_read(priv, 0, XDMA_SGDMA_DESC_HI),
+                     h2c_read(priv, 0, XDMA_SGDMA_DESC_LO));
+        }
+    }
     h2c_write(priv, 0, XDMA_SGDMA_DESC_ADJ, 0);
 
     /* Start transfer */
